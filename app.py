@@ -13,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom CSS agar tampilan ringkas
+# Custom CSS untuk menyembunyikan sidebar dan memperrapat tampilan
 st.markdown("""
     <style>
     [data-testid="collapsedControl"] {display: none;}
@@ -24,26 +24,40 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- FUNGSI OPENCV MULTI-CONTOUR DETECTION ---
-def process_multi_pattern_image(uploaded_file, dpi=96, min_area_cm2=5.0):
+def process_multi_pattern_image(uploaded_file, dpi=96, min_area_px=500):
     """
     Membaca 1 gambar berisi BANYAK POLA, melacak semua kontur tertutup,
     dan mengembalikan list dari luas area (cm²) untuk tiap komponen yang terdeteksi.
     """
     try:
-        image_bytes = uploaded_file.read()
-        image = Image.open(io.BytesIO(image_bytes))
-        img_np = np.array(image)
+        # Read file into OpenCV
+        file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+        img = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
         
-        if len(img_np.shape) == 3:
-            gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+        if img is None:
+            st.error("Format file tidak dapat dibaca oleh OpenCV.")
+            return []
+
+        # Convert to Grayscale
+        if len(img.shape) == 3 and img.shape[2] == 4: # RGBA
+            gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+        elif len(img.shape) == 3: # RGB/BGR
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         else:
-            gray = img_np
+            gray = img
 
-        # Binarization
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        # Preprocessing: Blur & Thresholding
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # Otsu's thresholding + Canny edge fallback
+        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        
+        # Morphological Closing untuk menyambungkan garis terputus
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
-        # Temukan SEMUA Kontur
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Temukan Kontur
+        contours, _ = cv2.findContours(closed.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         pixels_per_cm = dpi / 2.54
         detected_components = []
@@ -51,10 +65,10 @@ def process_multi_pattern_image(uploaded_file, dpi=96, min_area_cm2=5.0):
         # Loop semua kontur dan hitung luas masing-masing
         for idx, cnt in enumerate(contours):
             area_px = cv2.contourArea(cnt)
-            area_cm2 = area_px / (pixels_per_cm ** 2)
             
-            # Filter noise / bercak kecil yang bukan pola
-            if area_cm2 >= min_area_cm2:
+            # Filter noise / bercak kecil
+            if area_px >= min_area_px:
+                area_cm2 = area_px / (pixels_per_cm ** 2)
                 detected_components.append({
                     "Komponen": f"Pola Component #{len(detected_components)+1}",
                     "Panjang (cm)": 100.0,
@@ -66,23 +80,27 @@ def process_multi_pattern_image(uploaded_file, dpi=96, min_area_cm2=5.0):
 
         return detected_components
     except Exception as e:
-        st.error(f"Gagal memproses gambar multi-pattern: {e}")
+        st.error(f"Error Pemrosesan OpenCV: {e}")
         return []
-
 
 # --- FUNGSI OPENCV SINGLE-CONTOUR (UNTUK BARIS INDIVIDUAL) ---
 def process_single_pattern_image(uploaded_file, dpi=96):
     try:
-        image_bytes = uploaded_file.read()
-        image = Image.open(io.BytesIO(image_bytes))
-        img_np = np.array(image)
+        file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+        img = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
         
-        if len(img_np.shape) == 3:
-            gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-        else:
-            gray = img_np
+        if img is None:
+            return 0.0
 
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        if len(img.shape) == 3 and img.shape[2] == 4:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+        elif len(img.shape) == 3:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = img
+
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         if not contours:
@@ -116,6 +134,7 @@ if "material_list" not in st.session_state:
 # --- AREA UPLOAD MASTER PATTERN (MULTI DETEKSI) ---
 with st.expander("🧩 **Upload Gambar Master Pattern (Otomatis Deteksi & Pecah Banyak Komponen)**", expanded=True):
     master_file = st.file_uploader("Upload 1 lembar gambar berisi kumpulan semua pola komponen sepatu:", type=["png", "jpg", "jpeg"], key="master_pattern_uploader")
+    
     if master_file is not None:
         if st.button("🚀 Process & Generate Komponen Otomatis"):
             new_components = process_multi_pattern_image(master_file)
@@ -124,7 +143,7 @@ with st.expander("🧩 **Upload Gambar Master Pattern (Otomatis Deteksi & Pecah 
                 st.success(f"Berhasil mendeteksi {len(new_components)} komponen dari gambar master!")
                 st.rerun()
             else:
-                st.warning("Tidak ada kontur pola yang terdeteksi secara jelas.")
+                st.warning("Tidak ada kontur pola yang terdeteksi. Coba upload gambar dengan garis pola yang lebih jelas/kontras.")
 
 st.markdown("---")
 
@@ -167,7 +186,7 @@ for i, row in enumerate(st.session_state.material_list):
     waste = c5.number_input(f"wst_{i}", value=float(row["Waste (%)"]), min_value=0.0, label_visibility="collapsed", key=f"wst_{i}")
     price = c7.number_input(f"price_{i}", value=float(row.get("Harga / Sheet (Rp)", 0.0)), min_value=0.0, step=1000.0, label_visibility="collapsed", key=f"price_{i}")
 
-    # Kalkulasi
+    # Kalkulasi Yield & Costing
     sheet_area = length * width
     gross_area = net_area * (1 + (waste / 100))
     
@@ -176,7 +195,7 @@ for i, row in enumerate(st.session_state.material_list):
     cost_per_pair = (price / pairs) if pairs > 0 else 0.0
     total_cost_per_pair += cost_per_pair
 
-    # Display
+    # Display Hasil
     c8.markdown(f"**{pairs}** pairs\n\n*({yield_pct:.1f}% yield)*")
     c9.markdown(f"**Rp {cost_per_pair:,.0f}**" if cost_per_pair > 0 else "-")
     
@@ -191,7 +210,7 @@ for i, row in enumerate(st.session_state.material_list):
 
 st.session_state.material_list = updated_list
 
-# Tombol Manual Add
+# Tombol Tambah Baris Manual
 st.markdown("")
 if st.button("➕ Tambah Baris Manual"):
     st.session_state.material_list.append({
@@ -204,7 +223,7 @@ if st.button("➕ Tambah Baris Manual"):
     })
     st.rerun()
 
-# Rekap Total
+# Rekap Total Cost
 st.markdown("---")
 if total_cost_per_pair > 0:
     st.subheader(f"💵 Total Material Cost per Pair: Rp {total_cost_per_pair:,.0f}")
