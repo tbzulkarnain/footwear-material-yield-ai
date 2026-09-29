@@ -13,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom CSS untuk menyembunyikan sidebar dan memperrapat tampilan
+# Custom CSS untuk menyembunyikan sidebar dan merapatkan tampilan
 st.markdown("""
     <style>
     [data-testid="collapsedControl"] {display: none;}
@@ -23,11 +23,11 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- FUNGSI OPENCV MULTI-CONTOUR DETECTION ---
-def process_multi_pattern_image(uploaded_file, dpi=96, min_area_px=500):
+# --- FUNGSI OPENCV MULTI-CONTOUR DETECTION (IMPROVED & ROBUST) ---
+def process_multi_pattern_image(uploaded_file, dpi=96, min_area_px=300):
     """
-    Membaca 1 gambar berisi BANYAK POLA, melacak semua kontur tertutup,
-    dan mengembalikan list dari luas area (cm²) untuk tiap komponen yang terdeteksi.
+    Membaca 1 gambar berisi BANYAK POLA TERPISAH, melacak semua kontur tertutup,
+    dan mengembalikan list dari luas area (cm²) untuk tiap komponen.
     """
     try:
         # Read file into OpenCV
@@ -46,12 +46,15 @@ def process_multi_pattern_image(uploaded_file, dpi=96, min_area_px=500):
         else:
             gray = img
 
-        # Preprocessing: Blur & Thresholding
+        # Preprocessing & Blur
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         
-        # Otsu's thresholding + Canny edge fallback
-        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        
+        # Adaptive Thresholding untuk garis tipis dan kontras bervariasi
+        thresh = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY_INV, 11, 2
+        )
+
         # Morphological Closing untuk menyambungkan garis terputus
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
@@ -61,13 +64,16 @@ def process_multi_pattern_image(uploaded_file, dpi=96, min_area_px=500):
 
         pixels_per_cm = dpi / 2.54
         detected_components = []
+        
+        img_h, img_w = gray.shape[:2]
+        max_area_px = (img_h * img_w) * 0.9  # Filter out jika kontur mengambil seluruh bingkai gambar
 
         # Loop semua kontur dan hitung luas masing-masing
         for idx, cnt in enumerate(contours):
             area_px = cv2.contourArea(cnt)
             
-            # Filter noise / bercak kecil
-            if area_px >= min_area_px:
+            # Filter noise / bingkai luar gambar
+            if min_area_px <= area_px <= max_area_px:
                 area_cm2 = area_px / (pixels_per_cm ** 2)
                 detected_components.append({
                     "Komponen": f"Pola Component #{len(detected_components)+1}",
@@ -100,13 +106,23 @@ def process_single_pattern_image(uploaded_file, dpi=96):
             gray = img
 
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        thresh = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY_INV, 11, 2
+        )
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         if not contours:
             return 0.0
 
-        largest_contour = max(contours, key=cv2.contourArea)
+        img_h, img_w = gray.shape[:2]
+        max_area_px = (img_h * img_w) * 0.9
+
+        valid_contours = [c for c in contours if cv2.contourArea(c) <= max_area_px]
+        if not valid_contours:
+            return 0.0
+
+        largest_contour = max(valid_contours, key=cv2.contourArea)
         area_px = cv2.contourArea(largest_contour)
         pixels_per_cm = dpi / 2.54
         return round(area_px / (pixels_per_cm ** 2), 2)
@@ -133,7 +149,7 @@ if "material_list" not in st.session_state:
 
 # --- AREA UPLOAD MASTER PATTERN (MULTI DETEKSI) ---
 with st.expander("🧩 **Upload Gambar Master Pattern (Otomatis Deteksi & Pecah Banyak Komponen)**", expanded=True):
-    master_file = st.file_uploader("Upload 1 lembar gambar berisi kumpulan semua pola komponen sepatu:", type=["png", "jpg", "jpeg"], key="master_pattern_uploader")
+    master_file = st.file_uploader("Upload 1 lembar gambar berisi kumpulan pola komponen terpisah:", type=["png", "jpg", "jpeg"], key="master_pattern_uploader")
     
     if master_file is not None:
         if st.button("🚀 Process & Generate Komponen Otomatis"):
@@ -143,7 +159,7 @@ with st.expander("🧩 **Upload Gambar Master Pattern (Otomatis Deteksi & Pecah 
                 st.success(f"Berhasil mendeteksi {len(new_components)} komponen dari gambar master!")
                 st.rerun()
             else:
-                st.warning("Tidak ada kontur pola yang terdeteksi. Coba upload gambar dengan garis pola yang lebih jelas/kontras.")
+                st.warning("Tidak ada kontur pola terpisah yang terdeteksi. Pastikan gambar tidak berisi garis pola bertumpuk (grading lines).")
 
 st.markdown("---")
 
