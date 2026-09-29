@@ -23,54 +23,84 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- FUNGSI OPENCV UNTUK EKSTRAKSI NET AREA ---
-def process_pattern_image(uploaded_file, dpi=96):
+# --- FUNGSI OPENCV MULTI-CONTOUR DETECTION ---
+def process_multi_pattern_image(uploaded_file, dpi=96, min_area_cm2=5.0):
     """
-    Membaca gambar pola, melacak kontur terluar, dan menghitung luas area dalam cm².
-    dpi: Dots Per Inch gambar (Default 96 DPI untuk gambar web standard, 300 DPI untuk scan/CAD)
+    Membaca 1 gambar berisi BANYAK POLA, melacak semua kontur tertutup,
+    dan mengembalikan list dari luas area (cm²) untuk tiap komponen yang terdeteksi.
     """
     try:
-        # 1. Convert uploaded file ke OpenCV Format
         image_bytes = uploaded_file.read()
         image = Image.open(io.BytesIO(image_bytes))
         img_np = np.array(image)
         
-        # Konversi ke Grayscale
         if len(img_np.shape) == 3:
             gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
         else:
             gray = img_np
 
-        # 2. Thresholding / Binarization (Memisahkan garis pola dari background)
-        # Gunakan Otsu's Thresholding untuk menangkap kontur secara otomatis
+        # Binarization
         _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-        # 3. Temukan Kontur (Outlines Pola)
+        # Temukan SEMUA Kontur
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        pixels_per_cm = dpi / 2.54
+        detected_components = []
+
+        # Loop semua kontur dan hitung luas masing-masing
+        for idx, cnt in enumerate(contours):
+            area_px = cv2.contourArea(cnt)
+            area_cm2 = area_px / (pixels_per_cm ** 2)
+            
+            # Filter noise / bercak kecil yang bukan pola
+            if area_cm2 >= min_area_cm2:
+                detected_components.append({
+                    "Komponen": f"Pola Component #{len(detected_components)+1}",
+                    "Panjang (cm)": 100.0,
+                    "Lebar (cm)": 140.0,
+                    "Net Area (cm²)": round(area_cm2, 2),
+                    "Waste (%)": 5.0,
+                    "Harga / Sheet (Rp)": 0.0
+                })
+
+        return detected_components
+    except Exception as e:
+        st.error(f"Gagal memproses gambar multi-pattern: {e}")
+        return []
+
+
+# --- FUNGSI OPENCV SINGLE-CONTOUR (UNTUK BARIS INDIVIDUAL) ---
+def process_single_pattern_image(uploaded_file, dpi=96):
+    try:
+        image_bytes = uploaded_file.read()
+        image = Image.open(io.BytesIO(image_bytes))
+        img_np = np.array(image)
+        
+        if len(img_np.shape) == 3:
+            gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = img_np
+
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         if not contours:
             return 0.0
 
-        # Ambil kontur terbesar (diasumsikan sebagai komponen pola utama)
         largest_contour = max(contours, key=cv2.contourArea)
-        area_in_pixels = cv2.contourArea(largest_contour)
-
-        # 4. Konversi Piksel ke cm²
-        # 1 inch = 2.54 cm -> 1 cm = dpi / 2.54 pixels
+        area_px = cv2.contourArea(largest_contour)
         pixels_per_cm = dpi / 2.54
-        area_in_cm2 = area_in_pixels / (pixels_per_cm ** 2)
-
-        return round(area_in_cm2, 2)
-    except Exception as e:
-        st.error(f"Gagal memproses gambar: {e}")
+        return round(area_px / (pixels_per_cm ** 2), 2)
+    except Exception:
         return 0.0
 
 
 # --- UI APLIKASI STREAMLIT ---
 st.title("👟 Footwear Material Yield & Costing AI")
-st.caption("Deteksi Net Area Otomatis Menggunakan OpenCV & Kalkulasi Biaya Material.")
+st.caption("Auto-Breakdown Multi-Component Pattern Menggunakan OpenCV & AI Vision")
 
-# Initialize Data awal
+# Initialize State Data
 if "material_list" not in st.session_state:
     st.session_state.material_list = [
         {
@@ -83,14 +113,29 @@ if "material_list" not in st.session_state:
         }
     ]
 
-# Header Kolom
+# --- AREA UPLOAD MASTER PATTERN (MULTI DETEKSI) ---
+with st.expander("🧩 **Upload Gambar Master Pattern (Otomatis Deteksi & Pecah Banyak Komponen)**", expanded=True):
+    master_file = st.file_uploader("Upload 1 lembar gambar berisi kumpulan semua pola komponen sepatu:", type=["png", "jpg", "jpeg"], key="master_pattern_uploader")
+    if master_file is not None:
+        if st.button("🚀 Process & Generate Komponen Otomatis"):
+            new_components = process_multi_pattern_image(master_file)
+            if new_components:
+                st.session_state.material_list = new_components
+                st.success(f"Berhasil mendeteksi {len(new_components)} komponen dari gambar master!")
+                st.rerun()
+            else:
+                st.warning("Tidak ada kontur pola yang terdeteksi secara jelas.")
+
+st.markdown("---")
+
+# Header Kolom Tabel
 h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns([2, 1, 1, 1.2, 0.9, 2, 1.1, 1, 1.2])
 h1.markdown("**Komponen Material**")
 h2.markdown("**P (cm)**")
 h3.markdown("**L (cm)**")
 h4.markdown("**Net Area (cm²)**")
 h5.markdown("**Waste (%)**")
-h6.markdown("**Upload Pattern (OpenCV)**")
+h6.markdown("**Upload Single Pattern**")
 h7.markdown("**Harga / Sheet (Rp)**")
 h8.markdown("**Pairs/Sheet**")
 h9.markdown("**Cost / Pair (Rp)**")
@@ -104,28 +149,25 @@ total_cost_per_pair = 0.0
 for i, row in enumerate(st.session_state.material_list):
     c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns([2, 1, 1, 1.2, 0.9, 2, 1.1, 1, 1.2])
     
-    # Input Langsung dalam Baris
     name = c1.text_input(f"name_{i}", value=row["Komponen"], placeholder="Nama Komponen...", label_visibility="collapsed", key=f"name_{i}")
     length = c2.number_input(f"len_{i}", value=float(row["Panjang (cm)"]), min_value=0.0, label_visibility="collapsed", key=f"len_{i}")
     width = c3.number_input(f"wid_{i}", value=float(row["Lebar (cm)"]), min_value=0.0, label_visibility="collapsed", key=f"wid_{i}")
     
-    # Upload Pattern Slot + OpenCV Processing
+    # Upload Per Baris
     uploaded_file = c6.file_uploader(f"file_{i}", type=["png", "jpg", "jpeg"], label_visibility="collapsed", key=f"file_{i}")
     
     net_area_val = float(row["Net Area (cm²)"])
-    
     if uploaded_file is not None:
-        # Ekstraksi Net Area menggunakan OpenCV
-        detected_area = process_pattern_image(uploaded_file, dpi=96)
+        detected_area = process_single_pattern_image(uploaded_file)
         if detected_area > 0:
             net_area_val = detected_area
-            c6.caption(f"✅ OpenCV Area: **{detected_area} cm²**")
+            c6.caption(f"✅ Area: **{detected_area} cm²**")
 
     net_area = c4.number_input(f"net_{i}", value=net_area_val, min_value=0.0, label_visibility="collapsed", key=f"net_{i}")
     waste = c5.number_input(f"wst_{i}", value=float(row["Waste (%)"]), min_value=0.0, label_visibility="collapsed", key=f"wst_{i}")
     price = c7.number_input(f"price_{i}", value=float(row.get("Harga / Sheet (Rp)", 0.0)), min_value=0.0, step=1000.0, label_visibility="collapsed", key=f"price_{i}")
 
-    # Kalkulasi Yield & Costing
+    # Kalkulasi
     sheet_area = length * width
     gross_area = net_area * (1 + (waste / 100))
     
@@ -134,7 +176,7 @@ for i, row in enumerate(st.session_state.material_list):
     cost_per_pair = (price / pairs) if pairs > 0 else 0.0
     total_cost_per_pair += cost_per_pair
 
-    # Display Hasil
+    # Display
     c8.markdown(f"**{pairs}** pairs\n\n*({yield_pct:.1f}% yield)*")
     c9.markdown(f"**Rp {cost_per_pair:,.0f}**" if cost_per_pair > 0 else "-")
     
@@ -147,12 +189,11 @@ for i, row in enumerate(st.session_state.material_list):
         "Harga / Sheet (Rp)": price
     })
 
-# Simpan Perubahan State
 st.session_state.material_list = updated_list
 
-# Tombol Tambah Baris
+# Tombol Manual Add
 st.markdown("")
-if st.button("➕ Tambah Baris Material Baru"):
+if st.button("➕ Tambah Baris Manual"):
     st.session_state.material_list.append({
         "Komponen": "",
         "Panjang (cm)": 0.0,
@@ -163,7 +204,7 @@ if st.button("➕ Tambah Baris Material Baru"):
     })
     st.rerun()
 
-# Rekap Total Cost
+# Rekap Total
 st.markdown("---")
 if total_cost_per_pair > 0:
     st.subheader(f"💵 Total Material Cost per Pair: Rp {total_cost_per_pair:,.0f}")
