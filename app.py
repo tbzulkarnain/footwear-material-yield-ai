@@ -2,8 +2,7 @@ import streamlit as st
 import pandas as pd
 import cv2
 import numpy as np
-from PIL import Image
-import io
+import uuid
 
 # Konfigurasi Halaman Wide & Tanpa Sidebar
 st.set_page_config(
@@ -23,7 +22,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- FUNGSI OPENCV MULTI-CONTOUR DETECTION (REVISED WASTE LOGIC) ---
+# --- FUNGSI OPENCV MULTI-CONTOUR DETECTION ---
 def process_multi_pattern_image(uploaded_file, dpi=96, min_area_px=300):
     try:
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
@@ -57,7 +56,6 @@ def process_multi_pattern_image(uploaded_file, dpi=96, min_area_px=300):
         img_h, img_w = gray.shape[:2]
         max_area_px = (img_h * img_w) * 0.9
 
-        # Filter kontur yang valid terlebih dahulu
         valid_contours = []
         for cnt in contours:
             area_px = cv2.contourArea(cnt)
@@ -67,36 +65,36 @@ def process_multi_pattern_image(uploaded_file, dpi=96, min_area_px=300):
         if not valid_contours:
             return []
 
-        # Cari area piksel terbesar sebagai acuan rasio
+        # Ambil area terbesar sebagai acuan rasio
         max_component_px = max(valid_contours, key=lambda x: x[1])[1]
 
         for idx, (cnt, area_px) in enumerate(valid_contours):
             area_cm2 = area_px / (pixels_per_cm ** 2)
-            
-            # Rasio ukuran terhadap komponen terbesar di gambar
             ratio = area_px / max_component_px
             
-            # Variasi waste berdasarkan ukuran relatif komponen
-            if ratio > 0.6:      # Komponen Utama / Besar (misal: Upper Main Body)
+            # Dynamic waste berdasarkan rasio ukuran relatif komponen
+            if ratio > 0.6:
                 default_waste = 7.0
-            elif ratio > 0.25:   # Komponen Sedang (misal: Lining / Quarter)
+            elif ratio > 0.25:
                 default_waste = 5.0
-            else:                # Komponen Kecil (misal: Tongue / Heel Strip)
+            else:
                 default_waste = 3.0
 
             detected_components.append({
+                "id": str(uuid.uuid4()),  # Unique ID untuk hindari bug delete
                 "Komponen": f"Pola Component #{len(detected_components)+1}",
                 "Panjang (cm)": 100.0,
                 "Lebar (cm)": 140.0,
                 "Net Area (cm²)": round(area_cm2, 2),
                 "Waste (%)": default_waste,
-                "Harga / Sheet (Rp)": 0.0
+                "Harga / Sheet ($)": 0.0
             })
 
         return detected_components
     except Exception as e:
         st.error(f"Error Pemrosesan OpenCV: {e}")
         return []
+
 # --- FUNGSI OPENCV SINGLE-CONTOUR ---
 def process_single_pattern_image(uploaded_file, dpi=96):
     try:
@@ -146,16 +144,17 @@ st.caption("Auto-Breakdown Multi-Component Pattern Menggunakan OpenCV & AI Visio
 if "material_list" not in st.session_state:
     st.session_state.material_list = [
         {
+            "id": str(uuid.uuid4()),
             "Komponen": "Upper Leather / Synthetic", 
             "Panjang (cm)": 100.0, 
             "Lebar (cm)": 140.0, 
             "Net Area (cm²)": 220.0, 
             "Waste (%)": 5.0,
-            "Harga / Sheet (Rp)": 150000.0
+            "Harga / Sheet ($)": 10.00
         }
     ]
 
-# --- AREA UPLOAD MASTER PATTERN (MULTI DETEKSI) ---
+# --- AREA UPLOAD MASTER PATTERN ---
 with st.expander("🧩 **Upload Gambar Master Pattern (Otomatis Deteksi & Pecah Banyak Komponen)**", expanded=True):
     master_file = st.file_uploader("Upload 1 lembar gambar berisi kumpulan pola komponen terpisah:", type=["png", "jpg", "jpeg"], key="master_pattern_uploader")
     
@@ -171,7 +170,7 @@ with st.expander("🧩 **Upload Gambar Master Pattern (Otomatis Deteksi & Pecah 
 
 st.markdown("---")
 
-# Header Kolom Tabel (Menambahkan Kolom Aksi Hapus)
+# Header Kolom Tabel
 h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns([2, 0.9, 0.9, 1.1, 0.8, 1.8, 1.1, 0.9, 1.1, 0.6])
 h1.markdown("**Komponen Material**")
 h2.markdown("**P (cm)**")
@@ -179,87 +178,75 @@ h3.markdown("**L (cm)**")
 h4.markdown("**Net Area (cm²)**")
 h5.markdown("**Waste (%)**")
 h6.markdown("**Upload Single Pattern**")
-h7.markdown("**Harga / Sheet (Rp)**")
+h7.markdown("**Harga / Sheet ($)**")
 h8.markdown("**Pairs/Sheet**")
-h9.markdown("**Cost / Pair (Rp)**")
+h9.markdown("**Cost / Pair ($)**")
 h10.markdown("**Aksi**")
 
 st.markdown("---")
 
-updated_list = []
 total_cost_per_pair = 0.0
-to_delete_idx = None
+id_to_delete = None
 
-# Render Baris Material
-for i, row in enumerate(st.session_state.material_list):
+# Render Baris Material Menggunakan Unique UUID
+for row in st.session_state.material_list:
+    row_id = row["id"]
     c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns([2, 0.9, 0.9, 1.1, 0.8, 1.8, 1.1, 0.9, 1.1, 0.6])
     
-    name = c1.text_input(f"name_{i}", value=row["Komponen"], placeholder="Nama Komponen...", label_visibility="collapsed", key=f"name_{i}")
-    length = c2.number_input(f"len_{i}", value=float(row["Panjang (cm)"]), min_value=0.0, label_visibility="collapsed", key=f"len_{i}")
-    width = c3.number_input(f"wid_{i}", value=float(row["Lebar (cm)"]), min_value=0.0, label_visibility="collapsed", key=f"wid_{i}")
+    row["Komponen"] = c1.text_input(f"name_{row_id}", value=row["Komponen"], placeholder="Nama Komponen...", label_visibility="collapsed")
+    row["Panjang (cm)"] = c2.number_input(f"len_{row_id}", value=float(row["Panjang (cm)"]), min_value=0.0, label_visibility="collapsed")
+    row["Lebar (cm)"] = c3.number_input(f"wid_{row_id}", value=float(row["Lebar (cm)"]), min_value=0.0, label_visibility="collapsed")
     
-    # Upload Per Baris
-    uploaded_file = c6.file_uploader(f"file_{i}", type=["png", "jpg", "jpeg"], label_visibility="collapsed", key=f"file_{i}")
+    # Upload Single File per Baris
+    uploaded_file = c6.file_uploader(f"file_{row_id}", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
     
-    net_area_val = float(row["Net Area (cm²)"])
     if uploaded_file is not None:
         detected_area = process_single_pattern_image(uploaded_file)
         if detected_area > 0:
-            net_area_val = detected_area
+            row["Net Area (cm²)"] = detected_area
             c6.caption(f"✅ Area: **{detected_area} cm²**")
 
-    net_area = c4.number_input(f"net_{i}", value=net_area_val, min_value=0.0, label_visibility="collapsed", key=f"net_{i}")
-    waste = c5.number_input(f"wst_{i}", value=float(row["Waste (%)"]), min_value=0.0, label_visibility="collapsed", key=f"wst_{i}")
-    price = c7.number_input(f"price_{i}", value=float(row.get("Harga / Sheet (Rp)", 0.0)), min_value=0.0, step=1000.0, label_visibility="collapsed", key=f"price_{i}")
+    row["Net Area (cm²)"] = c4.number_input(f"net_{row_id}", value=float(row["Net Area (cm²)"]), min_value=0.0, label_visibility="collapsed")
+    row["Waste (%)"] = c5.number_input(f"wst_{row_id}", value=float(row["Waste (%)"]), min_value=0.0, label_visibility="collapsed")
+    row["Harga / Sheet ($)"] = c7.number_input(f"price_{row_id}", value=float(row.get("Harga / Sheet ($)", 0.0)), min_value=0.0, step=0.1, format="%.2f", label_visibility="collapsed")
 
-    # Kalkulasi Yield & Costing
-    sheet_area = length * width
-    gross_area = net_area * (1 + (waste / 100))
+    # Kalkulasi Yield & Costing (USD)
+    sheet_area = row["Panjang (cm)"] * row["Lebar (cm)"]
+    gross_area = row["Net Area (cm²)"] * (1 + (row["Waste (%)"] / 100))
     
     pairs = int(sheet_area / gross_area) if gross_area > 0 else 0
-    yield_pct = (net_area / gross_area * 100) if gross_area > 0 else 0.0
-    cost_per_pair = (price / pairs) if pairs > 0 else 0.0
+    yield_pct = (row["Net Area (cm²)"] / gross_area * 100) if gross_area > 0 else 0.0
+    cost_per_pair = (row["Harga / Sheet ($)"] / pairs) if pairs > 0 else 0.0
     total_cost_per_pair += cost_per_pair
 
     # Display Hasil
     c8.markdown(f"**{pairs}** pairs\n\n*({yield_pct:.1f}% yield)*")
-    c9.markdown(f"**Rp {cost_per_pair:,.0f}**" if cost_per_pair > 0 else "-")
+    c9.markdown(f"**${cost_per_pair:.3f}**" if cost_per_pair > 0 else "-")
     
     # Tombol Hapus Baris
-    if c10.button("🗑️", key=f"del_{i}", help="Hapus komponen ini"):
-        to_delete_idx = i
+    if c10.button("🗑️", key=f"del_{row_id}", help="Hapus komponen ini"):
+        id_to_delete = row_id
 
-    updated_list.append({
-        "Komponen": name,
-        "Panjang (cm)": length,
-        "Lebar (cm)": width,
-        "Net Area (cm²)": net_area,
-        "Waste (%)": waste,
-        "Harga / Sheet (Rp)": price
-    })
-
-# Eksekusi Hapus Baris Jika Tombol Ditekan
-if to_delete_idx is not None:
-    updated_list.pop(to_delete_idx)
-    st.session_state.material_list = updated_list
+# Eksekusi Hapus Baris Berdasarkan Unique ID
+if id_to_delete is not None:
+    st.session_state.material_list = [item for item in st.session_state.material_list if item["id"] != id_to_delete]
     st.rerun()
-else:
-    st.session_state.material_list = updated_list
 
 # Tombol Tambah Baris Manual
 st.markdown("")
 if st.button("➕ Tambah Baris Manual"):
     st.session_state.material_list.append({
+        "id": str(uuid.uuid4()),
         "Komponen": "",
         "Panjang (cm)": 0.0,
         "Lebar (cm)": 0.0,
         "Net Area (cm²)": 0.0,
         "Waste (%)": 0.0,
-        "Harga / Sheet (Rp)": 0.0
+        "Harga / Sheet ($)": 0.0
     })
     st.rerun()
 
 # Rekap Total Cost
 st.markdown("---")
 if total_cost_per_pair > 0:
-    st.subheader(f"💵 Total Material Cost per Pair: Rp {total_cost_per_pair:,.0f}")
+    st.subheader(f"💵 Total Material Cost per Pair: ${total_cost_per_pair:.3f}")
