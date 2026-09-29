@@ -1,189 +1,144 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
-import json
-from PIL import Image
-from google import genai
 
-# ==========================================
-# 1. PAGE CONFIGURATION
-# ==========================================
+# Konfigurasi Halaman (Lebar Penuh)
 st.set_page_config(
-    page_title="tbzulkarnain | Footwear Material Yield AI",
-    page_icon="✂️",
+    page_title="Footwear Material Yield AI",
+    page_icon="👟",
     layout="wide"
 )
 
-# Custom CSS for Industrial Engineering styling
+# Custom CSS untuk styling card/modul material
 st.markdown("""
-<style>
-    .metric-card {
-        background-color: #FFFFFF;
-        border: 1px solid #E2E8F0;
-        border-radius: 8px;
-        padding: 16px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    <style>
+    .material-card {
+        background-color: #f8f9fa;
+        padding: 20px;
+        border-radius: 10px;
+        border-left: 5px solid #007bff;
+        margin-bottom: 25px;
     }
-    .footer-text {
-        text-align: center;
-        color: #64748B;
-        font-size: 13px;
-        padding: 15px 0;
+    .stButton>button {
+        width: 100%;
     }
-</style>
+    </style>
 """, unsafe_allow_html=True)
 
-# API Key Initialization (Gemini)
-API_KEY = st.sidebar.text_input("🔑 Gemini API Key", type="password", help="Masukkan Google Gemini API Key Anda untuk mengaktifkan AI Pattern & Interlock Analyzer.")
+# Main Header
+st.title("👟 Footwear Material Yield AI")
+st.caption("Hitung dan optimasi material yield sepatu secara langsung per komponen.")
 
-# ==========================================
-# 2. TITLE & HEADER
-# ==========================================
-st.title("✂️ Footwear Material Yield & Cutting Interlock AI")
-st.caption("Developed by **tbzulkarnain** | Industrial Engineering & Material Optimization Tool")
-st.markdown("---")
+# Session State untuk menyimpan list material
+if "materials" not in st.session_state:
+    st.session_state.materials = [
+        {"id": 1, "name": "Upper Leather / Synthetic", "length": 100.0, "width": 140.0, "net_area": 0.0, "allowance": 5.0}
+    ]
 
-# Sidebar - Material & Production Input
-st.sidebar.header("📋 Production Parameters")
-material_type = st.sidebar.selectbox("Material Type", ["Synthetic Leather Roll", "Textile / Mesh Roll", "Genuine Leather Hide"])
-roll_width = st.sidebar.number_input("Roll Width (Inches)", value=54.0, step=1.0)
-price_per_unit = st.sidebar.number_input("Material Price ($ / Meter)", value=4.50, step=0.10)
-order_qty = st.sidebar.number_input("Order Quantity (Pairs)", value=10000, step=1000)
+# Function Tambah Baris Material
+def add_material():
+    new_id = len(st.session_state.materials) + 1
+    st.session_state.materials.append({
+        "id": new_id,
+        "name": f"Material Component #{new_id}",
+        "length": 100.0,
+        "width": 140.0,
+        "net_area": 0.0,
+        "allowance": 5.0
+    })
 
-# ==========================================
-# 3. TABS LAYOUT
-# ==========================================
-tab1, tab2 = st.tabs(["📊 Yield & Cost Calculator", "🔍 AI Pattern & Interlock Analyzer"])
+# Function Hapus Baris Material
+def remove_material(index):
+    if len(st.session_state.materials) > 1:
+        st.session_state.materials.pop(index)
 
-# ------------------------------------------
-# TAB 1: YIELD & COST CALCULATOR
-# ------------------------------------------
-with tab1:
-    st.subheader("Calculator & What-If Scenario Analysis")
+# Loop Render Setiap Material
+results = []
+
+for i, mat in enumerate(st.session_state.materials):
+    st.markdown(f"### 📦 Komponen Material #{i+1}")
     
-    col_in1, col_in2 = st.columns(2)
-    
-    with col_in1:
-        st.markdown("#### Baseline Scenario")
-        net_area_base = st.number_input("Net Pattern Area per Pair (m²)", value=0.145, format="%.4f", key="net_base")
-        efficiency_base = st.slider("Current Nesting Efficiency (%)", 50.0, 95.0, 72.0, key="eff_base")
-        scrap_allowance = st.number_input("Cutting Scrap Allowance (%)", value=3.0, step=0.5, key="scrap_base")
+    with st.container():
+        col1, col2, col3 = st.columns([1.2, 1.5, 1])
         
-    with col_in2:
-        st.markdown("#### Optimized Scenario (Target)")
-        net_area_opt = st.number_input("Net Pattern Area per Pair (m²)", value=net_area_base, format="%.4f", key="net_opt")
-        efficiency_opt = st.slider("Target Nesting Efficiency (%)", 50.0, 95.0, 78.0, key="eff_opt")
+        # --- KOLOM 1: PARAMETER MATERIAL ---
+        with col1:
+            st.subheader("1. Parameter Sheet")
+            mat["name"] = st.text_input("Nama Material / Komponen", value=mat["name"], key=f"name_{i}")
+            mat["length"] = st.number_input("Panjang Roll/Sheet (cm)", value=mat["length"], min_value=0.0, key=f"len_{i}")
+            mat["width"] = st.number_input("Lebar Roll/Sheet (cm)", value=mat["width"], min_value=0.0, key=f"wid_{i}")
+            mat["allowance"] = st.number_input("Waste Allowance (%)", value=mat["allowance"], min_value=0.0, key=f"allow_{i}")
 
-    # Formulas
-    gross_cons_base = net_area_base / (efficiency_base / 100.0)
-    cost_pair_base = gross_cons_base * price_per_unit
-    total_mat_base = gross_cons_base * order_qty * (1 + (scrap_allowance / 100.0))
-    total_cost_base = total_mat_base * price_per_unit
-    
-    gross_cons_opt = net_area_opt / (efficiency_opt / 100.0)
-    cost_pair_opt = gross_cons_opt * price_per_unit
-    total_mat_opt = gross_cons_opt * order_qty * (1 + (scrap_allowance / 100.0))
-    total_cost_opt = total_mat_opt * price_per_unit
-    
-    cost_saving = total_cost_base - total_cost_opt
-    material_saved = total_mat_base - total_mat_opt
-
-    st.markdown("---")
-    st.subheader("💡 Financial & Material Impact")
-    
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Gross Cons. (Base)", f"{gross_cons_base:.4f} m²/pair")
-    m2.metric("Gross Cons. (Opt)", f"{gross_cons_opt:.4f} m²/pair", delta=f"{(gross_cons_opt - gross_cons_base):.4f}")
-    m3.metric("Material Cost / Pair", f"${cost_pair_opt:.2f}", delta=f"-${(cost_pair_base - cost_pair_opt):.2f}")
-    m4.metric("Total Project Savings", f"${cost_saving:,.2f}", delta_color="normal")
-
-    # Donut Chart - Material Usage Breakdown
-    st.markdown("---")
-    st.markdown("#### Material Waste Breakdown (Baseline)")
-    used_area = net_area_base
-    wasted_area = gross_cons_base - net_area_base
-    
-    fig = go.Figure(data=[go.Pie(
-        labels=['Net Pattern Area (Utilized)', 'Scrap / Interlock Gap (Waste)'],
-        values=[used_area, wasted_area],
-        hole=.5,
-        marker_colors=['#0284C7', '#EF4444']
-    )])
-    fig.update_layout(height=350, margin=dict(l=20, r=20, t=30, b=20))
-    st.plotly_chart(fig, use_container_width=True)
-
-# ------------------------------------------
-# TAB 2: AI PATTERN & INTERLOCK ANALYZER
-# ------------------------------------------
-with tab2:
-    st.subheader("AI-Powered Pattern & Nesting Interlock Optimization")
-    st.caption("Upload foto/gambar susunan pola cutting (interlock layout) untuk dianalisis oleh Gemini AI.")
-    
-    uploaded_file = st.file_uploader("Upload Cutting Pattern Image (JPG/PNG)", type=["jpg", "jpeg", "png"])
-    
-    if uploaded_file is not None:
-        image = Image.open(uploaded_file)
-        st.image(image, caption="Uploaded Pattern Layout", use_container_width=True)
-        
-        analyze_btn = st.button("🚀 Analyze Pattern & Interlock Efficiency")
-        
-        if analyze_btn:
-            if not API_KEY:
-                st.error("⚠️ Masukkan Gemini API Key di sidebar terlebih dahulu!")
+        # --- KOLOM 2: NET AREA & UPLOAD ---
+        with col2:
+            st.subheader("2. Net Area Pattern")
+            
+            # Pilihan kalkulasi / upload
+            calc_method = st.radio(
+                "Sumber Data Net Area:",
+                ["Input Manual", "Upload Gambar Pattern (AI / Vision)"],
+                key=f"method_{i}"
+            )
+            
+            if calc_method == "Input Manual":
+                mat["net_area"] = st.number_input(
+                    "Net Area Pattern per Pasang (cm²)", 
+                    value=mat["net_area"], 
+                    min_value=0.0, 
+                    key=f"net_{i}"
+                )
             else:
-                with st.spinner("AI sedang menganalisis kontur pola & celah interlock..."):
-                    try:
-                        client = genai.Client(api_key=API_KEY)
-                        
-                        prompt = """
-                        Kamu adalah pakar Pattern CAD, Cutting Yield, dan Industrial Engineering di manufaktur sepatu.
-                        Analisis gambar pola potongan upper sepatu (nesting layout) ini.
-                        Berikan output HANYA berupa JSON valid dengan format persis seperti ini:
-                        {
-                            "pattern_count": 12,
-                            "estimated_nesting_efficiency": 76.5,
-                            "interlock_rating": "Good",
-                            "waste_area_analysis": "Celah antar komponen vamp dan quarter masih terlalu lebar.",
-                            "recommendation": "Putar posisi eyestay 180 derajat untuk mengisi selang-seling area lekukan."
-                        }
-                        Jangan tambahkan teks markdown pendahuluan atau penutup lain di luar JSON.
-                        """
-                        
-                        response = client.models.generate_content(
-                            model="gemini-2.5-flash",
-                            contents=[image, prompt]
-                        )
-                        
-                        clean_json = response.text.replace("```json", "").replace("```", "").strip()
-                        result = json.loads(clean_json)
-                        
-                        st.success("Analisis AI Selesai!")
-                        
-                        res_col1, res_col2 = st.columns(2)
-                        with res_col1:
-                            st.metric("Detected Pattern Count", f"{result.get('pattern_count', 'N/A')} pcs")
-                            st.metric("Est. Nesting Efficiency", f"{result.get('estimated_nesting_efficiency', 'N/A')}%")
-                            st.info(f"**Interlock Rating:** {result.get('interlock_rating', 'N/A')}")
-                            
-                        with res_col2:
-                            st.markdown("#### 📌 Waste Analysis")
-                            st.write(result.get("waste_area_analysis", "-"))
-                            st.markdown("#### 💡 AI Recommendation for Improvement")
-                            st.write(result.get("recommendation", "-"))
-                            
-                    except Exception as e:
-                        st.error(f"Gagal memproses gambar dengan AI: {str(e)}")
+                uploaded_file = st.file_uploader(
+                    "Upload Pattern CAD / Foto Pattern", 
+                    type=["png", "jpg", "jpeg", "dxf"], 
+                    key=f"file_{i}"
+                )
+                if uploaded_file is not None:
+                    # SIMULASI DUMMY AI DETEKSI AREA (Nanti bisa dihubungkan ke OpenCV/AI Model)
+                    simulated_detected_area = 245.50  # Contoh nilai hasil olah gambar
+                    st.success(f"Pattern Terdeteksi! Net Area: {simulated_detected_area} cm²")
+                    mat["net_area"] = simulated_detected_area
+                else:
+                    st.info("Upload file gambar pattern untuk ekstraksi area otomatis.")
 
-# ==========================================
-# 4. FOOTER WITH SUBTLE VISITOR COUNTER
-# ==========================================
-st.markdown("---")
-visitor_counter_html = """
-<div style="text-align: center; color: #6B7280; font-size: 13px; padding-top: 10px; padding-bottom: 10px;">
-    Footwear Material Yield AI | Industrial Engineering Portfolio | 
-    <span style="display: inline-block; vertical-align: middle; margin-left: 5px;">
-        <img src="https://hitwebcounter.com/counter/counter.php?page=18249015&style=0007&nbdigits=4&type=page&initCount=1" title="Counter Widget" Alt="Visit Counter" border="0" />
-    </span>
-</div>
-"""
-st.components.v1.html(visitor_counter_html, height=50)
+        # --- KOLOM 3: HASIL YIELD & PERHITUNGAN ---
+        with col3:
+            st.subheader("3. Hasil Material Yield")
+            
+            sheet_area = mat["length"] * mat["width"]
+            
+            if mat["net_area"] > 0 and sheet_area > 0:
+                gross_area_needed = mat["net_area"] * (1 + (mat["allowance"] / 100))
+                yield_percentage = (mat["net_area"] / gross_area_needed) * 100 if gross_area_needed > 0 else 0
+                pairs_per_sheet = int(sheet_area / gross_area_needed) if gross_area_needed > 0 else 0
+                
+                st.metric("Total Sheet Area", f"{sheet_area:,.1f} cm²")
+                st.metric("Pairs / Sheet", f"{pairs_per_sheet} Pairs")
+                st.metric("Material Yield", f"{yield_percentage:.2f}%")
+                
+                results.append({
+                    "Komponen": mat["name"],
+                    "Sheet Area (cm²)": sheet_area,
+                    "Net Area (cm²)": mat["net_area"],
+                    "Allowance (%)": mat["allowance"],
+                    "Pairs/Sheet": pairs_per_sheet,
+                    "Yield (%)": round(yield_percentage, 2)
+                })
+            else:
+                st.warning("Lengkapi data Sheet & Net Area untuk melihat hasil yield.")
+                
+        # Tombol Hapus Baris jika material > 1
+        if len(st.session_state.materials) > 1:
+            st.button("🗑️ Hapus Material Ini", key=f"del_{i}", on_click=remove_material, args=(i,))
+
+    st.markdown("---")
+
+# --- TOMBOL KONTROL UTAMA ---
+col_add, col_blank = st.columns([1, 3])
+with col_add:
+    st.button("➕ Tambah Material / Komponen", on_click=add_material, use_container_width=True)
+
+# --- REKAPITULASI SUMMARY TABLE ---
+if results:
+    st.subheader("📊 Ringkasan Material Yield")
+    df_results = pd.DataFrame(results)
+    st.dataframe(df_results, use_container_width=True)
