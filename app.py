@@ -23,14 +23,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- FUNGSI OPENCV MULTI-CONTOUR DETECTION (IMPROVED & ROBUST) ---
+# --- FUNGSI OPENCV MULTI-CONTOUR DETECTION ---
 def process_multi_pattern_image(uploaded_file, dpi=96, min_area_px=300):
-    """
-    Membaca 1 gambar berisi BANYAK POLA TERPISAH, melacak semua kontur tertutup,
-    dan mengembalikan list dari luas area (cm²) untuk tiap komponen.
-    """
     try:
-        # Read file into OpenCV
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
         img = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
         
@@ -38,49 +33,50 @@ def process_multi_pattern_image(uploaded_file, dpi=96, min_area_px=300):
             st.error("Format file tidak dapat dibaca oleh OpenCV.")
             return []
 
-        # Convert to Grayscale
-        if len(img.shape) == 3 and img.shape[2] == 4: # RGBA
+        if len(img.shape) == 3 and img.shape[2] == 4:
             gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
-        elif len(img.shape) == 3: # RGB/BGR
+        elif len(img.shape) == 3:
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         else:
             gray = img
 
-        # Preprocessing & Blur
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        
-        # Adaptive Thresholding untuk garis tipis dan kontras bervariasi
         thresh = cv2.adaptiveThreshold(
             blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
             cv2.THRESH_BINARY_INV, 11, 2
         )
 
-        # Morphological Closing untuk menyambungkan garis terputus
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
-        # Temukan Kontur
         contours, _ = cv2.findContours(closed.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         pixels_per_cm = dpi / 2.54
         detected_components = []
         
         img_h, img_w = gray.shape[:2]
-        max_area_px = (img_h * img_w) * 0.9  # Filter out jika kontur mengambil seluruh bingkai gambar
+        max_area_px = (img_h * img_w) * 0.9
 
-        # Loop semua kontur dan hitung luas masing-masing
         for idx, cnt in enumerate(contours):
             area_px = cv2.contourArea(cnt)
             
-            # Filter noise / bingkai luar gambar
             if min_area_px <= area_px <= max_area_px:
                 area_cm2 = area_px / (pixels_per_cm ** 2)
+                
+                # Variasi default waste berdasarkan estimasi ukuran
+                if area_cm2 > 200:
+                    default_waste = 7.0
+                elif area_cm2 > 80:
+                    default_waste = 5.0
+                else:
+                    default_waste = 3.0
+
                 detected_components.append({
                     "Komponen": f"Pola Component #{len(detected_components)+1}",
                     "Panjang (cm)": 100.0,
                     "Lebar (cm)": 140.0,
                     "Net Area (cm²)": round(area_cm2, 2),
-                    "Waste (%)": 5.0,
+                    "Waste (%)": default_waste,
                     "Harga / Sheet (Rp)": 0.0
                 })
 
@@ -89,7 +85,7 @@ def process_multi_pattern_image(uploaded_file, dpi=96, min_area_px=300):
         st.error(f"Error Pemrosesan OpenCV: {e}")
         return []
 
-# --- FUNGSI OPENCV SINGLE-CONTOUR (UNTUK BARIS INDIVIDUAL) ---
+# --- FUNGSI OPENCV SINGLE-CONTOUR ---
 def process_single_pattern_image(uploaded_file, dpi=96):
     try:
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
@@ -159,12 +155,12 @@ with st.expander("🧩 **Upload Gambar Master Pattern (Otomatis Deteksi & Pecah 
                 st.success(f"Berhasil mendeteksi {len(new_components)} komponen dari gambar master!")
                 st.rerun()
             else:
-                st.warning("Tidak ada kontur pola terpisah yang terdeteksi. Pastikan gambar tidak berisi garis pola bertumpuk (grading lines).")
+                st.warning("Tidak ada kontur pola terpisah yang terdeteksi.")
 
 st.markdown("---")
 
-# Header Kolom Tabel
-h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns([2, 1, 1, 1.2, 0.9, 2, 1.1, 1, 1.2])
+# Header Kolom Tabel (Menambahkan Kolom Aksi Hapus)
+h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns([2, 0.9, 0.9, 1.1, 0.8, 1.8, 1.1, 0.9, 1.1, 0.6])
 h1.markdown("**Komponen Material**")
 h2.markdown("**P (cm)**")
 h3.markdown("**L (cm)**")
@@ -174,15 +170,17 @@ h6.markdown("**Upload Single Pattern**")
 h7.markdown("**Harga / Sheet (Rp)**")
 h8.markdown("**Pairs/Sheet**")
 h9.markdown("**Cost / Pair (Rp)**")
+h10.markdown("**Aksi**")
 
 st.markdown("---")
 
 updated_list = []
 total_cost_per_pair = 0.0
+to_delete_idx = None
 
 # Render Baris Material
 for i, row in enumerate(st.session_state.material_list):
-    c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns([2, 1, 1, 1.2, 0.9, 2, 1.1, 1, 1.2])
+    c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns([2, 0.9, 0.9, 1.1, 0.8, 1.8, 1.1, 0.9, 1.1, 0.6])
     
     name = c1.text_input(f"name_{i}", value=row["Komponen"], placeholder="Nama Komponen...", label_visibility="collapsed", key=f"name_{i}")
     length = c2.number_input(f"len_{i}", value=float(row["Panjang (cm)"]), min_value=0.0, label_visibility="collapsed", key=f"len_{i}")
@@ -215,6 +213,10 @@ for i, row in enumerate(st.session_state.material_list):
     c8.markdown(f"**{pairs}** pairs\n\n*({yield_pct:.1f}% yield)*")
     c9.markdown(f"**Rp {cost_per_pair:,.0f}**" if cost_per_pair > 0 else "-")
     
+    # Tombol Hapus Baris
+    if c10.button("🗑️", key=f"del_{i}", help="Hapus komponen ini"):
+        to_delete_idx = i
+
     updated_list.append({
         "Komponen": name,
         "Panjang (cm)": length,
@@ -224,7 +226,13 @@ for i, row in enumerate(st.session_state.material_list):
         "Harga / Sheet (Rp)": price
     })
 
-st.session_state.material_list = updated_list
+# Eksekusi Hapus Baris Jika Tombol Ditekan
+if to_delete_idx is not None:
+    updated_list.pop(to_delete_idx)
+    st.session_state.material_list = updated_list
+    st.rerun()
+else:
+    st.session_state.material_list = updated_list
 
 # Tombol Tambah Baris Manual
 st.markdown("")
