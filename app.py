@@ -23,7 +23,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- FUNGSI OPENCV MULTI-CONTOUR DETECTION ---
+# --- FUNGSI OPENCV MULTI-CONTOUR DETECTION (REVISED WASTE LOGIC) ---
 def process_multi_pattern_image(uploaded_file, dpi=96, min_area_px=300):
     try:
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
@@ -57,34 +57,46 @@ def process_multi_pattern_image(uploaded_file, dpi=96, min_area_px=300):
         img_h, img_w = gray.shape[:2]
         max_area_px = (img_h * img_w) * 0.9
 
-        for idx, cnt in enumerate(contours):
+        # Filter kontur yang valid terlebih dahulu
+        valid_contours = []
+        for cnt in contours:
             area_px = cv2.contourArea(cnt)
-            
             if min_area_px <= area_px <= max_area_px:
-                area_cm2 = area_px / (pixels_per_cm ** 2)
-                
-                # Variasi default waste berdasarkan estimasi ukuran
-                if area_cm2 > 200:
-                    default_waste = 7.0
-                elif area_cm2 > 80:
-                    default_waste = 5.0
-                else:
-                    default_waste = 3.0
+                valid_contours.append((cnt, area_px))
 
-                detected_components.append({
-                    "Komponen": f"Pola Component #{len(detected_components)+1}",
-                    "Panjang (cm)": 100.0,
-                    "Lebar (cm)": 140.0,
-                    "Net Area (cm²)": round(area_cm2, 2),
-                    "Waste (%)": default_waste,
-                    "Harga / Sheet (Rp)": 0.0
-                })
+        if not valid_contours:
+            return []
+
+        # Cari area piksel terbesar sebagai acuan rasio
+        max_component_px = max(valid_contours, key=lambda x: x[1])[1]
+
+        for idx, (cnt, area_px) in enumerate(valid_contours):
+            area_cm2 = area_px / (pixels_per_cm ** 2)
+            
+            # Rasio ukuran terhadap komponen terbesar di gambar
+            ratio = area_px / max_component_px
+            
+            # Variasi waste berdasarkan ukuran relatif komponen
+            if ratio > 0.6:      # Komponen Utama / Besar (misal: Upper Main Body)
+                default_waste = 7.0
+            elif ratio > 0.25:   # Komponen Sedang (misal: Lining / Quarter)
+                default_waste = 5.0
+            else:                # Komponen Kecil (misal: Tongue / Heel Strip)
+                default_waste = 3.0
+
+            detected_components.append({
+                "Komponen": f"Pola Component #{len(detected_components)+1}",
+                "Panjang (cm)": 100.0,
+                "Lebar (cm)": 140.0,
+                "Net Area (cm²)": round(area_cm2, 2),
+                "Waste (%)": default_waste,
+                "Harga / Sheet (Rp)": 0.0
+            })
 
         return detected_components
     except Exception as e:
         st.error(f"Error Pemrosesan OpenCV: {e}")
         return []
-
 # --- FUNGSI OPENCV SINGLE-CONTOUR ---
 def process_single_pattern_image(uploaded_file, dpi=96):
     try:
